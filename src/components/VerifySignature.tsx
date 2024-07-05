@@ -20,7 +20,7 @@ import EC from "elliptic";
 import js256 from "js-sha256";
 import buffer from "buffer";
 import { arrayify, hexZeroPad, splitSignature } from "@ethersproject/bytes";
-
+import { ethers } from "ethers";
 import {
   AsnParser,
   AsnSerializer,
@@ -57,10 +57,10 @@ function buf2hex(buffer) {
 export default function VerifySignature() {
   const [message, setMessage] = useState("hello world");
   const [signature, setSignature] = useState(
-    "MEQCICPC3f4BX7mA9GjlqawoFhLYqK7A32-K6jUs5_YOShYIAiAx6Kx4kEgsxTygkmd16YP6EWymY-CSM_pxLYE7LjW1Cw"
+    "MEYCIQCJIe6P2tp-gCz1WjJwGNM4waqTk6Pud-Z-01nkgeOdQQIhAIi78bBmZS1GTvCY9xm7N4AoacCBjHz0HjToYdUH0QtK"
   );
   const [publicKey, setPublicKey] = useState(
-    "pQECAyYgASFYIFSjlS7nBuweEJhk9pW4DHkmic-SKpo3Wrfx-w6dTiG3IlggdASXG6ygj7DJUTlt6_ccg1OfLb8JubSN-6a6kXshyO4"
+    "pQECAyYgASFYINxD1fCAm2YO_qBIIxE7eRGmOeJ1H9YkeiOlP9lPdhQxIlggQ3zx10L2w1U5l6SDNhOsmOjJyiHaEpGf8pkCzast2r4"
   );
   const [verified, setVerified] = useState<boolean>();
   const handleVerify = useCallback(async () => {
@@ -141,6 +141,22 @@ export default function VerifySignature() {
     const unwrapedSignature = unwrapEC2Signature(signature);
     const verifyRes = key.verify(await toHash(signatureBase), signature);
     console.log("verifyRes: ", verifyRes);
+
+    const REAL_P256VERIFY_CONTRACT_ADDRESS =
+      "0x0000000000000000000000000000000000000100";
+    const provider = new ethers.providers.JsonRpcProvider(
+      "https://sepolia.era.zksync.dev"
+    );
+    const digest = isoUint8Array.toHex(await toHash(signatureBase));
+    const signatureHex = isoUint8Array.toHex(unwrapedSignature);
+    const xHex = key.getPublic().getX().toString(16);
+    const yHex = key.getPublic().getY().toString(16);
+    const data = "0x" + digest + signatureHex + xHex + yHex;
+    const res = await provider.call({
+      data: data,
+      to: REAL_P256VERIFY_CONTRACT_ADDRESS,
+    });
+    console.log("contract verify: ", res);
 
     const verifyAlgorithm: EcdsaParams = {
       name: "ECDSA",
