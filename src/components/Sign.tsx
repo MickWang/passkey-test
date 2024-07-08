@@ -7,8 +7,13 @@ import {
 } from "@simplewebauthn/server";
 import { decodeClientDataJSON } from "@simplewebauthn/server/helpers";
 import { base64url } from "../utils/index";
-import { isoBase64URL, isoUint8Array } from "@simplewebauthn/server/helpers";
-
+import {
+  isoBase64URL,
+  isoUint8Array,
+  parseAuthenticatorData,
+} from "@simplewebauthn/server/helpers";
+import { unwrapEC2Signature } from "./VerifySignature";
+import { ethers } from "ethers";
 export default function Sign() {
   const [message, setMessage] = useState("hello world");
 
@@ -17,11 +22,19 @@ export default function Sign() {
   const handleSign = useCallback(async () => {
     // To abort a WebAuthn call, instantiate an `AbortController`.
     // const abortController = new AbortController();
+    const array = new Uint8Array(32);
+
+    // 使用crypto.getRandomValues填充数组
+    const messgage = window.crypto.getRandomValues(array);
+    const msg = isoUint8Array.toHex(messgage);
+    // const msg = '0000000000000000000000000000000000000000000000000000000000000000'
+    console.log("msg: ", msg);
     const options = await generateAuthenticationOptions({
       rpID: "localhost",
       allowCredentials: [],
-      challenge: message,
+      challenge: msg,
     });
+    console.log("msg from option: ", options.challenge);
     const publicKeyCredentialRequestOptions = {
       // Server generated challenge
       challenge: base64url.decode(options.challenge), // tx hash
@@ -45,9 +58,18 @@ export default function Sign() {
     credential.rawId = base64url.encode(cred.rawId);
 
     // Base64URL encode some values
-
     const clientDataJSON = base64url.encode(cred.response.clientDataJSON);
     const authenticatorData = base64url.encode(cred.response.authenticatorData);
+
+    const parsedAuthData = parseAuthenticatorData(
+      isoBase64URL.toBuffer(authenticatorData)
+    );
+    const clientDataJSONHex = isoUint8Array.toHex(
+      isoBase64URL.toBuffer(clientDataJSON)
+    );
+    console.log("clientDataJSONHex: ", clientDataJSONHex);
+
+    console.log("parsedAuthData: ", parsedAuthData);
     const str = isoBase64URL.fromBuffer(cred.response.authenticatorData);
     const signature = base64url.encode(cred.response.signature);
     const userHandle = base64url.encode(cred.response.userHandle);
@@ -56,6 +78,58 @@ export default function Sign() {
     console.log("userHandle: ", atob(userHandle));
     console.log("credential id: ", cred.id);
 
+    //divide clientDataJson
+    console.log("clientDataJson base64: ", clientDataJSON);
+    let challengeBase64 = btoa(options.challenge);
+    console.log("challengeBase64: ", challengeBase64);
+    if (challengeBase64.includes("=")) {
+      challengeBase64 = challengeBase64.replace(/=/g, "");
+    }
+    const challengeIndex = clientDataJSON.indexOf(challengeBase64);
+    console.log("challengeIndex: ", challengeIndex);
+    if (challengeIndex === -1) {
+      console.log("challenge not found in clientDataJSON");
+      return;
+    }
+    const clientDataJsonPre = clientDataJSON.slice(0, challengeIndex);
+    const clientDataJsonPost = clientDataJSON.slice(
+      challengeIndex + challengeBase64.length
+    );
+    console.log("clientDataJsonPre: ", clientDataJsonPre);
+    console.log("clientDataJsonPost: ", clientDataJsonPost);
+    const _clientDataJson =
+      clientDataJsonPre + challengeBase64 + clientDataJsonPost;
+    console.log(
+      "clientDataJson: ",
+      _clientDataJson,
+      _clientDataJson === clientDataJSON
+    );
+
+    const opHash = isoUint8Array.toHex(isoBase64URL.toBuffer(challengeBase64));
+    console.log("opHash: ", opHash);
+    const unwrapedSignature = unwrapEC2Signature(
+      isoBase64URL.toBuffer(signature)
+    );
+    const sigX = unwrapedSignature.slice(0, 32);
+    const sigY = unwrapedSignature.slice(32);
+    console.log("sigX: ", sigX, sigY);
+    const keyHash =
+      "0x0000000000000000000000000000000000000000000000000000000000000000";
+    const authenticatorHex =
+      "0x" + isoUint8Array.toHex(isoBase64URL.toBuffer(authenticatorData));
+    const abiEncoder = new ethers.utils.AbiCoder();
+    const moduleSignature = abiEncoder.encode(
+      ["bytes32", "uint256", "uint256", "bytes", "string", "string"],
+      [
+        keyHash,
+        ethers.BigNumber.from("0x" + isoUint8Array.toHex(sigX)),
+        ethers.BigNumber.from("0x" + isoUint8Array.toHex(sigY)),
+        authenticatorHex,
+        clientDataJsonPre,
+        clientDataJsonPost,
+      ]
+    );
+    console.log("moduleSignature: ", moduleSignature);
     credential.response = {
       clientDataJSON,
       authenticatorData,
