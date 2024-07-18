@@ -4,10 +4,22 @@ import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
-import { isoBase64URL, isoUint8Array } from "@simplewebauthn/server/helpers";
+import {
+  isoBase64URL,
+  isoUint8Array,
+  decodeCredentialPublicKey,
+} from "@simplewebauthn/server/helpers";
+import { decodeClientDataJSON, cose } from "@simplewebauthn/server/helpers";
 import { useState, useEffect, useCallback } from "react";
 import { base64url } from "../utils";
-
+import EC from "elliptic";
+import {
+  BrowserProvider,
+  Provider,
+  Wallet,
+  types,
+  Signer,
+} from "zksync-ethers";
 export default function GeneratePasskey() {
   const [webAuthnSupported, setWebAuthnSupported] = useState(false);
   const [credentialInfo, setCredientialInfo] = useState<{
@@ -45,6 +57,19 @@ export default function GeneratePasskey() {
   }, []);
 
   const handleCreate = useCallback(async () => {
+    // // @ts-ignore
+    // const browserProvider = new BrowserProvider(window.ethereum);
+    // const signer = Signer.from(
+    //   await browserProvider.getSigner(),
+    //   Number((await browserProvider.getNetwork()).chainId),
+    //   Provider.getDefaultProvider(types.Network.Sepolia)
+    // );
+
+    // signer.sendTransaction({
+    //   to: Wallet.createRandom().address,
+    //   value: 10_000_000n,
+    // });
+    // return;
     if (!username) {
       alert("Please enter username");
       return;
@@ -109,16 +134,19 @@ export default function GeneratePasskey() {
     //   },
     // };
 
-    // bind: credential?.id, publicKey, address 
-    //  send tx: passkey sign tx; 
+    // bind: credential?.id, publicKey, address
+    //  send tx: passkey sign tx;
     //  verify: publicKey verify
-     //  tx send to chain to execute
-     
+    //  tx send to chain to execute
+
     const credential = await navigator.credentials.create({
       publicKey: publicKeyCredentialCreationOptions,
     });
     console.log("credential: ", credential);
     console.log("crential id: ", credential?.id);
+    const pkBuffer = credential.response.getPublicKey();
+    console.log("pkBUffer: ", base64url.encode(pkBuffer));
+
     if (!credential) return;
 
     // 对 ArrayBuffer 属性进行 Base64 URL 编码
@@ -155,6 +183,28 @@ export default function GeneratePasskey() {
         credentialId: registrationInfo.credentialID,
         publicKey: base64url.encode(registrationInfo.credentialPublicKey),
       });
+      const decodedPublicKey = decodeCredentialPublicKey(
+        registrationInfo.credentialPublicKey
+      );
+      const x = decodedPublicKey.get(cose.COSEKEYS.x);
+      const y = decodedPublicKey.get(cose.COSEKEYS.y);
+      console.log("x y : ", x, y);
+      // const pk = new Uint8Array([...x, ...y]);
+      const ec = new EC.ec("p256");
+      // Import public key
+      const key = ec.keyFromPublic(
+        {
+          x: decodedPublicKey.get(cose.COSEKEYS.x),
+          y: decodedPublicKey.get(cose.COSEKEYS.y),
+        },
+        "hex"
+      );
+      const xHex = key.getPublic().getX().toString(16);
+      const yHex = key.getPublic().getY().toString(16);
+      console.log("xHex: ", xHex);
+      console.log("yHex: ", yHex);
+      const publicKey = `${xHex}${yHex}`;
+      console.log("publicKey: ", publicKey);
     }
     //TODO: call contract to save address, credentialID, credentialPublicKey
   }, [username]);

@@ -13,9 +13,21 @@ import {
   parseAuthenticatorData,
 } from "@simplewebauthn/server/helpers";
 import { unwrapEC2Signature } from "./VerifySignature";
-import { ethers } from "ethers";
+import { ethers, keccak256, AbiCoder, hexlify, toUtf8Bytes } from "ethers";
+import { Base64 } from "js-base64";
+const n = "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551";
+const msg = "0000000000000000000000000000000000000000000000000000000000000000";
+
+const P256_N_DIV_2 = BigInt(n) / 2n;
+const checkSigS = (s: string) => {
+  if (BigInt(s) > P256_N_DIV_2) {
+    return "0x" + (BigInt(n) - BigInt(s)).toString(16);
+  } else {
+    return s;
+  }
+};
 export default function Sign() {
-  const [message, setMessage] = useState("hello world");
+  const [message, setMessage] = useState(msg);
 
   const [signature, setSignature] = useState("");
 
@@ -26,22 +38,36 @@ export default function Sign() {
 
     // 使用crypto.getRandomValues填充数组
     const messgage = window.crypto.getRandomValues(array);
-    const msg = isoUint8Array.toHex(messgage);
+    const msg1 = isoUint8Array.toHex(messgage);
     // const msg = '0000000000000000000000000000000000000000000000000000000000000000'
-    console.log("msg: ", msg);
+    console.log("msg: ", msg1);
     const options = await generateAuthenticationOptions({
       rpID: "localhost",
       allowCredentials: [],
-      challenge: msg,
+      challenge: message,
     });
-    console.log("msg from option: ", options.challenge);
+    // console.log("msg from option: ", options.challenge);
+    // 对hex string进行base64url编码和转成ArrayBuffer再进行base64url解码得到的结果不一样。
+    const msgBase64 = Base64.fromUint8Array(isoUint8Array.fromHex(msg)); // url safe
+    const key = "WebAuthnUser";
+
+    const keyIdHash = keccak256(hexlify(toUtf8Bytes(key)));
+    console.log("key abiEncode: ", hexlify(toUtf8Bytes(key)));
+    console.log("keyIdHash: ", keyIdHash);
+    const keyIdHashBase64 = Base64.encode(keyIdHash);
     const publicKeyCredentialRequestOptions = {
       // Server generated challenge
-      challenge: base64url.decode(options.challenge), // tx hash
+      challenge: base64url.decode(keyIdHashBase64), // tx hash
       // `allowCredentials` empty array invokes an account selector by discoverable credentials.
       allowCredentials: [],
     };
 
+    console.log(
+      "base64: ",
+      Base64.encode(msg),
+      Base64.encode(options.challenge),
+      Base64.fromUint8Array(isoUint8Array.fromHex(msg))
+    );
     const cred = await navigator.credentials.get({
       publicKey: publicKeyCredentialRequestOptions,
       // signal: abortController.signal,
@@ -78,18 +104,32 @@ export default function Sign() {
     console.log("userHandle: ", atob(userHandle));
     console.log("credential id: ", cred.id);
 
+    const challengeBase64Length =
+      decodeClientDataJSON(clientDataJSON).challenge.length;
+    const challengeBase64Index = atob(clientDataJSON).indexOf("challenge");
+    const challengeLength = "challenge".length;
+    const pre = atob(clientDataJSON).substring(
+      0,
+      challengeBase64Index + challengeLength + 3
+    );
+    const post = atob(clientDataJSON).substring(
+      challengeBase64Index + challengeLength + 3 + challengeBase64Length
+    );
+
     //divide clientDataJson
     console.log("clientDataJson base64: ", clientDataJSON);
-    let challengeBase64 = btoa(options.challenge);
+    let challengeBase64 = Base64.encode(msgBase64);
     console.log("challengeBase64: ", challengeBase64);
     if (challengeBase64.includes("=")) {
       challengeBase64 = challengeBase64.replace(/=/g, "");
     }
-    const challengeIndex = clientDataJSON.indexOf(challengeBase64);
+    let challengeIndex = clientDataJSON.indexOf(
+      challengeBase64.substring(0, challengeBase64.length - 1) // the last char is different
+    );
     console.log("challengeIndex: ", challengeIndex);
     if (challengeIndex === -1) {
       console.log("challenge not found in clientDataJSON");
-      return;
+      // return;
     }
     const clientDataJsonPre = clientDataJSON.slice(0, challengeIndex);
     const clientDataJsonPost = clientDataJSON.slice(
@@ -117,13 +157,17 @@ export default function Sign() {
       "0x0000000000000000000000000000000000000000000000000000000000000000";
     const authenticatorHex =
       "0x" + isoUint8Array.toHex(isoBase64URL.toBuffer(authenticatorData));
-    const abiEncoder = new ethers.utils.AbiCoder();
+    console.log("authenticatorHex: ", authenticatorHex);
+    console.log("sigx: ", "0x" + isoUint8Array.toHex(sigX));
+    console.log("sigy: ", "0x" + isoUint8Array.toHex(sigY));
+
+    const abiEncoder = new AbiCoder();
     const moduleSignature = abiEncoder.encode(
       ["bytes32", "uint256", "uint256", "bytes", "string", "string"],
       [
         keyHash,
-        ethers.BigNumber.from("0x" + isoUint8Array.toHex(sigX)),
-        ethers.BigNumber.from("0x" + isoUint8Array.toHex(sigY)),
+        "0x" + isoUint8Array.toHex(sigX),
+        "0x" + isoUint8Array.toHex(sigY),
         authenticatorHex,
         clientDataJsonPre,
         clientDataJsonPost,
@@ -139,6 +183,32 @@ export default function Sign() {
 
     localStorage.setItem("credential_verify", JSON.stringify(credential));
 
+    const s = "0x" + isoUint8Array.toHex(sigY);
+    const _s = checkSigS(s);
+
+    const encoded = abiEncoder.encode(
+      [
+        "bytes32",
+        "uint256",
+        "uint256",
+        "bytes",
+        "bool",
+        "string",
+        "string",
+        "uint256",
+      ],
+      [
+        keyIdHash,
+        "0x" + isoUint8Array.toHex(sigX),
+        "0x" + _s,
+        authenticatorHex,
+        true,
+        pre,
+        post,
+        1,
+      ]
+    );
+    console.log("encoded: ", encoded);
     setSignature(signature);
   }, [message]);
 
